@@ -1,0 +1,9 @@
+# Dependency directories
+node_modules/
+.pnpm-store/
+.yarn/cache/
+.yarn/unplugged/
+
+# Production build
+build/
+dist/
