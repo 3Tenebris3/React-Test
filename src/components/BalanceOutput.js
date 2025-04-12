@@ -75,21 +75,15 @@ BalanceOutput.propTypes = {
   }).isRequired
 };
 
-export default connect(state => {
-
-  const accounts = state.accounts;
-  const journalEntries = state.journalEntries;
-  const { startAccount, endAccount, startPeriod, endPeriod } = state.userInput;
-
-  if (!state.userInput.format) {
-    return {
-      balance: [],
-      totalDebit: 0,
-      totalCredit: 0,
-      userInput: state.userInput
-    };
-  }
-
+/**
+ * Returns the effective account boundaries based on user input.
+ *
+ * @param {Array} accounts - Array of account objects.
+ * @param {number} startAccount - The user input for the start account.
+ * @param {number} endAccount - The user input for the end account.
+ * @returns {Object} An object with effectiveStartAccount and effectiveEndAccount.
+ */
+function getEffectiveAccountBoundaries(accounts, startAccount, endAccount) {
   const effectiveStartAccount = isNaN(startAccount)
     ? Math.min(...accounts.map(a => a.ACCOUNT))
     : startAccount;
@@ -97,6 +91,18 @@ export default connect(state => {
     ? Math.max(...accounts.map(a => a.ACCOUNT))
     : endAccount;
 
+  return { effectiveStartAccount, effectiveEndAccount };
+}
+
+/**
+ * Returns the effective date period based on user input and journal entries.
+ *
+ * @param {Array} journalEntries - Array of journal entry objects.
+ * @param {Date} startPeriod - The user input for the start period.
+ * @param {Date} endPeriod - The user input for the end period.
+ * @returns {Object} An object with effectiveStartPeriod and effectiveEndPeriod.
+ */
+function getEffectivePeriods(journalEntries, startPeriod, endPeriod) {
   const validJournalPeriods = journalEntries
     .filter(j => j.PERIOD && !isNaN(j.PERIOD.getTime()))
     .map(j => j.PERIOD.getTime());
@@ -115,17 +121,20 @@ export default connect(state => {
     ? new Date(defaultEndTime)
     : endPeriod;
 
-  console.log('Effective Start Period:', effectiveStartPeriod);
-  console.log('Effective End Period:', effectiveEndPeriod);
+  return { effectiveStartPeriod, effectiveEndPeriod };
+}
 
-  const filteredAccounts = accounts
-    .filter(account =>
-      account.ACCOUNT >= effectiveStartAccount &&
-      account.ACCOUNT <= effectiveEndAccount
-    )
-    .sort((a, b) => a.ACCOUNT - b.ACCOUNT);
-
-  const balance = filteredAccounts.map(account => {
+/**
+ * Calculates the account balances for each filtered account.
+ *
+ * @param {Array} filteredAccounts - Array of accounts filtered by account boundaries.
+ * @param {Array} journalEntries - Array of journal entry objects.
+ * @param {Date} effectiveStartPeriod - Effective start period.
+ * @param {Date} effectiveEndPeriod - Effective end period.
+ * @returns {Array} Array of balance objects.
+ */
+function calculateAccountBalances(filteredAccounts, journalEntries, effectiveStartPeriod, effectiveEndPeriod) {
+  return filteredAccounts.map(account => {
     const entries = journalEntries.filter(j => {
       if (!j.PERIOD || isNaN(j.PERIOD.getTime())) return false;
       const entryTime = j.PERIOD.getTime();
@@ -136,20 +145,59 @@ export default connect(state => {
       );
     });
 
-    const totalDebitForAccount = entries.reduce((acc, entry) => acc + entry.DEBIT, 0);
-    const totalCreditForAccount = entries.reduce((acc, entry) => acc + entry.CREDIT, 0);
+    const totalDebit = entries.reduce((acc, e) => acc + e.DEBIT, 0);
+    const totalCredit = entries.reduce((acc, e) => acc + e.CREDIT, 0);
 
     return {
       ACCOUNT: account.ACCOUNT,
       DESCRIPTION: account.LABEL || '',
-      DEBIT: totalDebitForAccount,
-      CREDIT: totalCreditForAccount,
-      BALANCE: totalDebitForAccount - totalCreditForAccount
+      DEBIT: totalDebit,
+      CREDIT: totalCredit,
+      BALANCE: totalDebit - totalCredit
     };
   });
+}
 
-  const totalCredit = balance.reduce((acc, entry) => acc + entry.CREDIT, 0);
+export default connect(state => {
+  const accounts = state.accounts;
+  const journalEntries = state.journalEntries;
+  const { startAccount, endAccount, startPeriod, endPeriod } = state.userInput;
+
+  // If no format is set, return empty output.
+  if (!state.userInput.format) {
+    return {
+      balance: [],
+      totalDebit: 0,
+      totalCredit: 0,
+      userInput: state.userInput
+    };
+  }
+
+  // Compute effective account boundaries.
+  const { effectiveStartAccount, effectiveEndAccount } =
+    getEffectiveAccountBoundaries(accounts, startAccount, endAccount);
+
+  // Compute effective date periods.
+  const { effectiveStartPeriod, effectiveEndPeriod } =
+    getEffectivePeriods(journalEntries, startPeriod, endPeriod);
+
+  // Filter accounts within numeric boundaries and sort them.
+  const filteredAccounts = accounts
+    .filter(account =>
+      account.ACCOUNT >= effectiveStartAccount &&
+      account.ACCOUNT <= effectiveEndAccount
+    )
+    .sort((a, b) => a.ACCOUNT - b.ACCOUNT);
+
+  // Calculate each account’s balance based on journal entries within the effective date range.
+  const allBalances = calculateAccountBalances(filteredAccounts, journalEntries, effectiveStartPeriod, effectiveEndPeriod);
+
+  // Filter out accounts that have zero transactions in the period.
+  const balance = allBalances.filter(row => row.DEBIT !== 0 || row.CREDIT !== 0);
+
+  // Re-compute totals.
   const totalDebit = balance.reduce((acc, entry) => acc + entry.DEBIT, 0);
+  const totalCredit = balance.reduce((acc, entry) => acc + entry.CREDIT, 0);
 
   return {
     balance,
